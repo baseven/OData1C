@@ -30,7 +30,7 @@ class Q:
     without modifying the originals.
 
     Example:
-        from src.odata.query import Q
+        from OData1C.odata.query import Q
 
         # Simple equality condition: Name eq 'Ivanov'
         q = Q(name='Ivanov')

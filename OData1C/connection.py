@@ -6,7 +6,7 @@ from requests import Response, Session, Request
 from requests.auth import AuthBase
 from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
 
-from src.exceptions import ODataConnectionError
+from OData1C.exceptions import ODataConnectionError
 
 
 DEFAULT_CONNECTION_TIMEOUT = 10.0

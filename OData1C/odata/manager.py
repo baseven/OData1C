@@ -3,10 +3,10 @@ from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 from requests import Response
 
-from src.connection import Connection, ODataRequest
-from src.exceptions import ODataError, ODataResponseError
-from src.models import ODataModel
-from src.odata.query import Q
+from OData1C.connection import Connection, ODataRequest
+from OData1C.exceptions import ODataError, ODataResponseError
+from OData1C.models import ODataModel
+from OData1C.odata.query import Q
 
 OM = TypeVar("OM", bound=ODataModel)
 
