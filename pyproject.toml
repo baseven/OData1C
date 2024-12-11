@@ -3,8 +3,9 @@ name = "odata1c"
 version = "0.1.0"
 description = ""
 authors = ["Vladislav Akashev <vlad.akashev.w@gmail.com>"]
+license = "MIT"
 readme = "README.md"
-packages = [{include = "src"}]
+packages = [{include = "OData1C"}]
 
 
 [tool.poetry.dependencies]
