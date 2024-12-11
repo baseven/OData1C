@@ -21,7 +21,7 @@ OData1C — это Python-клиент для взаимодействия с с
 ## Установка
 
 ```bash
-pip install OData1C
+pip install odata1c-client
 ```
 
 ## Зависимости

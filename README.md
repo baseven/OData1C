@@ -21,7 +21,7 @@ While originally inspired by [PyOData1C](https://github.com/kr-aleksey/PyOData1C
 ## Installation
 
 ```bash
-pip install OData1C
+pip install odata1c-client
 ```
 
 ## Dependencies
