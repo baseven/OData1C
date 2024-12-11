@@ -11,278 +11,186 @@ type_repr: Dict[Type[Any], Callable[[Any], str]] = {
 
 class Q:
     """
-    A class for building OData filter expressions in a style similar to Django's Q objects.
-
-    The `Q` class encapsulates conditions and logical combinations of conditions for OData queries.
-    It allows the developer to construct complex `$filter` expressions by chaining and combining
-    multiple conditions through logical connectors (AND, OR) and applying negations (NOT).
-
-    Key features:
-    - Support for a variety of comparison operators: eq, ne, gt, ge, lt, le, in.
-    - Easy logical composition using Python's bitwise operators:
-        - `&` corresponds to the `and` connector.
-        - `|` corresponds to the `or` connector.
-        - `~` applies a `not` negation.
-    - Recursive combination of conditions, enabling complex and nested filter queries.
-    - Field mapping and annotation capabilities for handling OData-specific types (e.g., guid, datetime).
-
-    The `Q` objects are effectively immutable; operations like `&`, `|`, and `~` produce new `Q` objects
-    without modifying the originals.
-
-    Example:
-        from OData1C.odata.query import Q
-
-        # Simple equality condition: Name eq 'Ivanov'
-        q = Q(name='Ivanov')
-
-        # Combined condition: Name eq 'Ivanov' and Age gt 30
-        q = Q(name='Ivanov') & Q(age__gt=30)
-
-        # Negation: not(Name eq 'Ivanov')
-        q = ~Q(name='Ivanov')
-
-        # Using the 'in' operator: (Code eq 'ABC' or Code eq 'XYZ')
-        q = Q(code__in=['ABC', 'XYZ'])
-
-    Calling `str(q)` returns the OData filter expression string, which can be attached
-    to an OData query, enabling flexible and maintainable query construction.
+    Q is a node of a tree graph. A node is a connection whose child
+    nodes are either leaf nodes or other instances of the node.
+    This code is partially based on Django code.
     """
+    AND = 'and'
+    OR = 'or'
+    NOT = 'not'
 
-    AND = "and"
-    OR = "or"
-    NOT = "not"
+    _operators = ('eq', 'ne', 'gt', 'ge', 'lt', 'le', 'in')
+    _default_operator = 'eq'
+    _annotations = ('guid', 'datetime')
+    _arg_error_msg = 'The positional argument must be a Q object. Received {}.'
 
-    _OPERATORS = {"eq", "ne", "gt", "ge", "lt", "le", "in"}
-    _DEFAULT_OPERATOR = "eq"
-    _ANNOTATIONS = {"guid", "datetime"}
-    _ARG_ERROR_MSG = "The positional argument must be a Q object. Received {}."
-
-    def __init__(self, *args: "Q", **kwargs: Any):
+    def __new__(cls, *args: 'Q', **kwargs: Any):
         """
-        Initializes a Q object with conditions and/or nested Q objects.
-
-        Positional arguments must be Q objects and are combined with the default connector (AND).
-        Keyword arguments represent conditions in the form of `field__operator=value`.
-        If no operator is provided, `eq` is used by default.
-        If `in` operator is used, it expands into multiple `eq` conditions joined by `OR`.
-
-        Raises:
-            ValueError: If no arguments or keyword conditions are provided.
-            TypeError: If any positional argument is not a Q object.
+        Creates a Q object with kwargs leaf. Combines the created
+        Q object with the objects passed via positional arguments
+        using &. Returns the resulting Q object.
+        :param args: Q objects.
+        :param kwargs: Lookups.
         """
-        if not args and not kwargs:
-            raise ValueError("No arguments provided to Q object.")
-
-        self.children: List[Any] = []
-        self.connector = self.AND
-        self.negated = False
-
+        obj = super().__new__(cls)
+        children = []
         for key, value in kwargs.items():
-            parts = key.split("__")
-            operator = parts[1] if len(parts) > 1 else self._DEFAULT_OPERATOR
-            if operator == "in":
-                self.children.append(
-                    self.create(children=[(key, value)], connector=self.OR)
-                )
+            _, lookup, *_ = *key.split('__'), None
+            if lookup == 'in':
+                children.append(
+                    cls.create(children=[(key, value)], connector=Q.OR))
             else:
-                self.children.append((key, value))
+                children.append((key, value))
+        obj.children = children
+        obj.connector = Q.AND
+        obj.negated = False
 
         for arg in args:
             if not isinstance(arg, Q):
-                raise TypeError(self._ARG_ERROR_MSG.format(type(arg)))
-            self.children.append(arg)
+                raise TypeError(cls._arg_error_msg.format(type(arg)))
+            obj &= arg
+
+        return obj
+
+    def __init__(self, *args: 'Q', **kwargs: Any):
+        if not args and not kwargs:
+            raise AttributeError('No arguments given')
 
     @classmethod
-    def create(
-        cls,
-        children: Optional[List[Any]] = None,
-        connector: Optional[str] = None,
-        negated: bool = False,
-    ) -> "Q":
-        """
-        Creates a new Q instance with the given children, connector, and negation flag.
-
-        This factory method is useful for internal operations like copying or combining Q objects
-        without invoking the main constructor logic that expects Q objects or conditions as arguments.
-
-        Args:
-            children (Optional[List[Any]]): A list of conditions or Q objects.
-            connector (Optional[str]): The logical connector (AND/OR) for combining children.
-            negated (bool): Whether the resulting Q object should be negated (NOT).
-
-        Returns:
-            Q: A new Q object configured with the provided parameters.
-        """
-        obj = cls()
-        obj.children = children or []
-        obj.connector = connector or cls.AND
+    def create(cls, children=None, connector=None, negated=False):
+        obj = cls.__new__(cls)
+        obj.children = children.copy() if children else []
+        obj.connector = connector if connector is not None else connector
         obj.negated = negated
         return obj
 
     def __str__(self) -> str:
-        """Returns the OData filter expression as a string."""
         return self.build_expression()
 
     def __repr__(self) -> str:
-        """Returns a developer-friendly representation of the Q object."""
-        return f"<Q: {self}>"
+        return f'<{self.__class__.__name__}: {self}>'
 
-    def __or__(self, other: "Q") -> "Q":
-        """Combines this Q with another Q using OR logic."""
-        return self.combine(other, self.OR)
+    def __copy__(self):
+        return self.create(children=self.children,
+                           connector=self.connector,
+                           negated=self.negated)
 
-    def __and__(self, other: "Q") -> "Q":
-        """Combines this Q with another Q using AND logic."""
-        return self.combine(other, self.AND)
+    copy = __copy__
 
-    def __invert__(self) -> "Q":
-        """
-        Applies a NOT operator to this Q object, effectively negating its conditions.
+    def __or__(self, other):
+        return self.combine(other=other, connector=self.OR)
 
-        Returns:
-            Q: A new Q object with the negation applied.
-        """
+    def __and__(self, other):
+        return self.combine(other=other, connector=self.AND)
+
+    def __invert__(self):
         obj = self.copy()
         obj.negated = not self.negated
         return obj
 
-    def copy(self) -> "Q":
-        """
-        Creates a copy of this Q object, retaining the same children, connector, and negation state.
+    def add(self, other) -> None:
+        if self.connector != other.connector or other.negated:
+            self.children.append(other)
+        else:
+            self.children.extend(other.children)
 
-        Returns:
-            Q: A new Q object identical to the current one.
-        """
-        return self.create(
-            children=self.children, connector=self.connector, negated=self.negated
-        )
-
-    def combine(self, other: "Q", connector: str) -> "Q":
-        """
-        Combines this Q object with another Q object using the specified logical connector (AND/OR).
-
-        Args:
-            other (Q): Another Q object to combine with.
-            connector (str): The logical connector (Q.AND or Q.OR).
-
-        Raises:
-            TypeError: If 'other' is not a Q object.
-
-        Returns:
-            Q: A new Q object representing (this Q) connector (other Q).
-        """
-        if not isinstance(other, Q):
-            raise TypeError(self._ARG_ERROR_MSG.format(type(other)))
+    def combine(self, other, connector):
         obj = self.create(connector=connector)
-        obj.children = [self, other]
+        obj.add(self)
+        obj.add(other)
         return obj
 
-    def build_expression(self, field_mapping: Optional[Dict[str, str]] = None) -> str:
+    def build_expression(self,
+                         field_mapping: dict[str, str] | None = None) -> str:
         """
-        Recursively builds the OData filter expression string from the Q object's conditions and sub-Q objects.
-
-        If the Q object is negated, it wraps the resulting expression with 'not'.
-        If children contain nested Q objects, their expressions are built recursively.
-        Conditions represented as (key, value) tuples are expanded into OData-compatible filter syntax.
-
-        Args:
-            field_mapping (Optional[Dict[str, str]]): A mapping from internal field names to OData field names.
-
-        Returns:
-            str: The fully constructed OData filter expression.
+        Recursively iterates over child elements. Builds an expression
+        taking into account the priorities of the operations.
+        The field_mapping argument is used to map the field name
+        to the OData field name.
+        :param field_mapping: {field_name: alias}
+        :return: Full filter expression.
         """
-        expressions = []
+        child_expressions: list[str] = []
         for child in self.children:
             if isinstance(child, Q):
-                expr = child.build_expression(field_mapping)
-                if child.negated:
-                    expr = f"{self.NOT} ({expr})"
-                expressions.append(expr)
+                child_expression: str = child.build_expression(field_mapping)
+                if self.connector == Q.AND and child.connector == Q.OR:
+                    child_expression: str = f'({child_expression})'
             else:
-                expr = self._build_lookup(child, field_mapping)
-                expressions.append(expr)
-        connector = f" {self.connector} "
-        expression = connector.join(expressions)
+                child_expression: str = self._build_lookup(child,
+                                                           field_mapping)
+            child_expressions.append(child_expression)
+        expression = f' {self.connector} '.join(child_expressions)
         if self.negated:
-            expression = f"{self.NOT} ({expression})"
+            expression = f'{self.NOT} ({expression})'
         return expression
 
-    def _build_lookup(
-        self, lookup: Any, field_mapping: Optional[Dict[str, str]] = None
-    ) -> str:
+    def _build_lookup(self,
+                      lookup: tuple[str, Any],
+                      field_mapping: dict[str, str] | None = None) -> str:
         """
-        Builds a single lookup (condition) for a field and operator.
-
-        Lookup is a tuple (key, value), where key may include operators and annotations
-        in the format `field__operator__annotation`. If no operator is provided, `eq` is used by default.
-
-        Args:
-            lookup (Any): A tuple (key, value) representing a condition.
-            field_mapping (Optional[Dict[str, str]]): A mapping of internal to OData field names.
-
-        Raises:
-            ValueError: If an unsupported operator is used.
-
-        Returns:
-            str: The OData condition string, e.g. "Name eq 'Ivanov'".
+        Builds a lookup to a filter expression.
+        :param lookup: (key, value)
+        :param field_mapping: {field_name: alias}
+        :return: Expression. For example: "Name eq 'Ivanov'"
         """
-        key, value = lookup
-        parts = key.split("__")
-        field = parts[0]
-        operator = parts[1] if len(parts) > 1 else self._DEFAULT_OPERATOR
-        annotation = parts[2] if len(parts) > 2 else None
-
-        if field_mapping and field in field_mapping:
+        field, operator, annotation, *_ = (
+            *lookup[0].split('__', maxsplit=3),
+            None,
+            None
+        )
+        if field_mapping is not None:
+            if field not in field_mapping:
+                raise KeyError(
+                    f"Field '{field}' not found. "
+                    f"Use one of {list(field_mapping.keys())}"
+                )
             field = field_mapping[field]
+        operator = operator or self._default_operator
+        if operator not in self._operators:
+            raise KeyError(
+                f"Unsupported operator {operator} ({lookup[0]}). "
+                f"Use one of {self._operators}."
+            )
+        return self._get_lookup_builder(operator)(field, lookup[1], annotation)
 
-        if operator not in self._OPERATORS:
-            raise ValueError(f"Unsupported operator '{operator}' in lookup '{key}'.")
+    def _get_lookup_builder(self, lookup: str) -> Callable:
+        if lookup == 'in':
+            return self._in_builder
+        return lambda field, value, annotation: \
+            f'{field} {lookup} {self._annotate_value(value, annotation)}'
 
-        if operator == "in":
-            return self._in_lookup(field, value, annotation)
-        else:
-            value_repr = self._format_value(value, annotation)
-            return f"{field} {operator} {value_repr}"
-
-    def _in_lookup(self, field: str, values: Iterable[Any], annotation: Optional[str]) -> str:
+    def _in_builder(self,
+                    field: str,
+                    value: Any,
+                    annotation: str | None) -> str:
         """
-        Handles the 'in' operator by expanding a list of values into multiple 'eq' comparisons combined with OR.
-
-        For example, code__in=['ABC', 'XYZ'] -> "code eq 'ABC' or code eq 'XYZ'".
-
-        Args:
-            field (str): The field name.
-            values (Iterable[Any]): The set of values to check.
-            annotation (Optional[str]): An optional annotation (e.g., 'guid', 'datetime').
-
-        Returns:
-            str: An OData expression that checks if the field equals one of the given values.
+        :param field: Field name.
+        :param value: Value.
+        :param annotation: Annotation.
+        Converts lookup 'in' to an Odata filter parameter.
+        For example: 'foo eq value or foo eq value2 ...'
         """
-        expressions = [
-            f"{field} eq {self._format_value(value, annotation)}" for value in values
-        ]
-        return " or ".join(expressions)
+        items = [f'{field} eq {self._annotate_value(v, annotation)}'
+                 for v in value]
+        return ' or '.join(items)
 
-    def _format_value(self, value: Any, annotation: Optional[str]) -> str:
+    def _annotate_value(self,
+                        value: Any,
+                        annotation: str | None) -> str:
         """
-        Formats a value according to OData rules, taking into account annotations and types.
-
-        If an annotation (e.g. 'datetime') is given, the value is wrapped accordingly:
-        "datetime'2024-12-07T10:00:00'".
-
-        For known types (bool, str, datetime), it applies predefined formatting rules (type_repr).
-        For unknown types, it defaults to str(value).
-
-        Args:
-            value (Any): The value to format.
-            annotation (Optional[str]): An optional annotation (e.g., 'guid', 'datetime').
-
-        Returns:
-            str: The value formatted for inclusion in an OData filter expression.
+        :param value: Value to annotate.
+        :param annotation: Annotation ('guid', 'date', etc ).
+        :return: Annotated value. For example: guid'123'.
         """
-        if annotation and annotation in self._ANNOTATIONS:
+        if annotation is not None:
+            if annotation not in self._annotations:
+                raise KeyError(
+                    f"Unknown annotation {annotation}. "
+                    f"Use one of {self._annotations}"
+                )
             return f"{annotation}'{value}'"
-        value_type = type(value)
-        if value_type in type_repr:
-            return type_repr[value_type](value)
+
+        if type(value) in type_repr:
+            return type_repr[type(value)](value)
         return str(value)

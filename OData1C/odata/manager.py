@@ -1,7 +1,10 @@
+from datetime import datetime
 from http import HTTPStatus
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
+from typing import Any, Callable, Iterable, Type, TypeVar
 
+from pydantic import ValidationError
 from requests import Response
+import requests.exceptions as r_exceptions
 
 from OData1C.connection import Connection, ODataRequest
 from OData1C.exceptions import ODataError, ODataResponseError
@@ -9,6 +12,13 @@ from OData1C.models import ODataModel
 from OData1C.odata.query import Q
 
 OM = TypeVar("OM", bound=ODataModel)
+
+
+type_repr = {
+    bool: lambda v: str(v).lower(),
+    str: lambda v: f"'{v}'",
+    datetime: lambda v: "datetime'{}'".format(v.isoformat('T', 'seconds')),
+}
 
 
 class OData:
@@ -23,13 +33,14 @@ class OData:
     Once defined, you can create an ODataManager instance via `manager()` to perform
     queries and operations on the entity.
     """
-
     database: str
-    entity_model: Type[OM]
+    entity_model: OM
     entity_name: str
 
+    _err_msg: str = "Required attribute not defined: {}."
+
     @classmethod
-    def manager(cls, connection: Connection) -> "ODataManager[OM]":
+    def manager(cls, connection: Connection) -> 'ODataManager':
         """
         Creates and returns an ODataManager instance for this OData entity.
 
@@ -42,197 +53,266 @@ class OData:
         Returns:
             ODataManager[OM]: A manager instance for querying and operating on the entity.
         """
-        if not hasattr(cls, "entity_model") or not hasattr(cls, "entity_name"):
-            raise AttributeError("OData subclass must define 'entity_model' and 'entity_name'.")
-        return ODataManager(cls, connection)
+        assert hasattr(cls, 'entity_model'), (
+            cls._err_msg.format(f'{cls.__name__}.entity_model'))
+        assert hasattr(cls, 'entity_name'), (
+            cls._err_msg.format(f'{cls.__name__}.entity_name'))
+        return ODataManager(odata_class=cls, connection=connection)
 
 
-class ODataManager(Generic[OM]):
-    """
-    ODataManager handles querying and retrieving data for a specific OData entity.
-
-    It allows building OData queries by setting filters (`filter()`), expansions (`expand()`),
-    and pagination (`top()`, `skip()`), then executing the query with methods like `all()`.
-    The manager sends requests, validates responses, and returns typed model instances.
-    """
-
-    odata_path = "odata/standard.odata"
-    odata_list_json_key = "value"
+class ODataManager:
+    odata_path = 'odata/standard.odata'
+    odata_list_json_key = 'value'
 
     def __init__(self, odata_class: Type[OData], connection: Connection):
-        """
-        Initializes a new ODataManager instance.
-
-        Args:
-            odata_class (Type[OData]): The OData subclass defining database, entity_model, and entity_name.
-            connection (Connection): The connection used to communicate with the OData service.
-        """
         self.odata_class = odata_class
         self.connection = connection
-        self.request: Optional[ODataRequest] = None
-        self.response: Optional[Response] = None
-        self.validation_errors: List[Exception] = []
-        self._expand_fields: Optional[List[str]] = None
-        self._filter_conditions: Optional[Q] = None
-        self._skip: Optional[int] = None
-        self._top: Optional[int] = None
+        self.request: ODataRequest | None = None
+        self.response: Response | None = None
+        self.validation_errors: list[ValidationError] = []
+        self._expand: Iterable[str] | None = None
+        self._filter: Q | None = None
+        self._skip: int | None = None
+        self._top: int | None = None
 
-    def all(self, ignore_invalid: bool = False) -> List[OM]:
+    def __str__(self):
+        return f'{self.odata_class.__name__} manager'
+
+    def _check_response(self, ok_status: int) -> None:
+        """Checking response status code."""
+        if self.response.status_code != ok_status:
+            raise ODataResponseError(self.response.status_code,
+                                self.response.reason,
+                                self.response.text)
+
+    def _validate(self,
+                  data: list[dict[str, Any]] | dict[str, Any],
+                  ignore_invalid: bool = False
+                  ) -> list[OM] | OM:
+        """Validation of response data."""
+        self.validation_errors = []
+        if isinstance(data, list):
+            validated_objs = []
+            for obj in data:
+                validated_objs.append(self._validate_obj(obj, ignore_invalid))
+            return validated_objs
+        return self._validate_obj(data, ignore_invalid)
+
+    def _validate_obj(self,
+                      obj: dict[str, Any],
+                      ignore_invalid: bool) -> OM:
+        """Object validation."""
+        try:
+            return self.odata_class.entity_model.model_validate(obj)
+        except ValidationError as e:
+            self.validation_errors.append(e)
+            if not ignore_invalid:
+                raise e
+
+    def _json(self) -> dict[str, Any]:
+        """Decodes json response."""
+        try:
+            data = self.response.json()
+        except r_exceptions.JSONDecodeError as e:
+            raise ODataError(e)
+        return data
+
+    @staticmethod
+    def _to_dict(data: OM | dict[str, Any]) -> dict[str, Any]:
+        """Converts data to dict."""
+        if isinstance(data, ODataModel):
+            return data.model_dump(by_alias=True)
+        return data
+
+    def get_url(self) -> str:
+        """Returns the url of the entity."""
+        return (f'{self.odata_class.database}'
+                f'/{self.odata_path}'
+                f'/{self.odata_class.entity_name}')
+
+    def get_canonical_url(self, guid: str) -> str:
+        """Returns the canonical url of the entity."""
+        return f"{self.get_url()}(guid'{guid}')"
+
+    def all(self, ignore_invalid: bool = False) -> list[OM]:
         """
-        Executes an OData GET request and returns a list of entity instances.
-
-        This method constructs the OData query based on current filters, expansions, top/skip settings,
-        sends the request, checks the response, parses it, and validates the data.
-
-        Args:
-            ignore_invalid (bool): If True, invalid items are skipped and stored in `validation_errors`.
-                                   If False, the first validation error raises an exception.
-
-        Returns:
-            List[OM]: A list of validated model instances corresponding to the OData entities.
+        Returns validated instances of the ODataModel class.
+        If ignore_invalid = True, invalid objects will be skipped,
+        errors will be accumulated in self.validation_errors.
+        Otherwise, a pydantic.ValidationError exception will be raised.
         """
-        query_params = self._prepare_query_params()
         self.request = ODataRequest(
-            method="GET", relative_url=self.get_url(), query_params=query_params
+            method='GET',
+            relative_url=self.get_url(),
+            query_params=self.prepare_query_params(
+                self.qp_select,
+                self.qp_expand,
+                self.qp_top,
+                self.qp_skip,
+                self.qp_filter
+            )
         )
         self.response = self.connection.send_request(self.request)
         self._check_response(HTTPStatus.OK)
-        data = self._parse_response()
-        return self._validate_data(data, ignore_invalid)
+        try:
+            data: list[dict[str, Any]] = self._json()[self.odata_list_json_key]
+        except KeyError:
+            raise ODataError(
+                f'Response json has no key {self.odata_list_json_key}'
+            )
+        return self._validate(data, ignore_invalid)
 
-    def filter(self, *args: Q, **kwargs: Any) -> "ODataManager[OM]":
+    def create(self, data: OM| dict[str, Any]) -> OM:
+        """Creates a new entity."""
+        self.request = ODataRequest(method='POST',
+                               relative_url=self.get_url(),
+                               data=self._to_dict(data))
+        self.response = self.connection.send_request(self.request)
+        self._check_response(HTTPStatus.CREATED)
+        return self._validate(self._json())
+
+    def get(self, guid: str) -> OM:
+        """Get an entity by guid."""
+        self.request = ODataRequest(method='GET',
+                               relative_url=self.get_canonical_url(guid),
+                               query_params=self.prepare_query_params(
+                                   self.qp_select, self.qp_expand)
+                               )
+        self.response = self.connection.send_request(self.request)
+        self._check_response(HTTPStatus.OK)
+        return self._validate(self._json())
+
+    def update(self,
+               guid: str,
+               data: OM | dict[str, Any]) -> OM:
+        """Updates (patch) an entity by guid."""
+        self.request = ODataRequest(
+            method='PATCH',
+            relative_url=self.get_canonical_url(guid),
+            data=self._to_dict(data),
+            query_params=self.prepare_query_params(
+                self.qp_select,
+                self.qp_expand
+            )
+        )
+        self.response = self.connection.send_request(self.request)
+        self._check_response(HTTPStatus.OK)
+        return self._validate(self._json())
+
+    def post_document(self,
+                      guid: str,
+                      operational_mode: bool = False) -> None:
+        """Document posting."""
+        self.request = ODataRequest(
+            method='POST',
+            relative_url=f'{self.get_canonical_url(guid)}/Post',
+            query_params={
+                'PostingModeOperational':
+                    type_repr[bool](
+                        operational_mode)
+            }
+        )
+        self.response = self.connection.send_request(self.request)
+        self._check_response(HTTPStatus.OK)
+
+    def unpost_document(self, guid: str) -> None:
+        """Cancel posting a document."""
+        self.request = ODataRequest(
+            method='POST',
+            relative_url=f'{self.get_canonical_url(guid)}/Unpost'
+        )
+        self.response = self.connection.send_request(self.request)
+        self._check_response(HTTPStatus.OK)
+
+    """Query parameters."""
+
+    @property
+    def qp_select(self) -> tuple[str, str | None]:
+        qp = '$select'
+        fields = self.odata_class.entity_model.model_fields
+        nested_models = self.odata_class.entity_model.nested_models
+        aliases = []
+        for field, info in fields.items():
+            alias = info.alias or field
+            if nested_models is not None and field in nested_models:
+                for nested_field, nested_info in nested_models[
+                    field].model_fields.items():
+                    nested_alias = nested_info.alias or nested_field
+                    aliases.append(f'{alias}/{nested_alias}')
+            else:
+                aliases.append(alias)
+        return qp, ', '.join(aliases)
+
+    @property
+    def qp_expand(self) -> tuple[str, str | None]:
+        qp = '$expand'
+        if self._expand is None:
+            return qp, None
+        fields = self.odata_class.entity_model.model_fields
+        aliases = []
+        for field_name in self._expand:
+            aliases.append(fields[field_name].alias or field_name)
+        return '$expand', ', '.join(aliases)
+
+    def expand(self, *args: str) -> 'ODataManager':
+        nested_models = self.odata_class.entity_model.nested_models
+        fields = []
+        for field_name in args:
+            if field_name not in nested_models:
+                raise ValueError(
+                    f"Nested model '{field_name}' not found. "
+                    f"Use one of {list(nested_models.keys())}"
+                )
+            fields.append(field_name)
+        self._expand = fields
+        return self
+
+    @property
+    def qp_filter(self) -> tuple[str, str | None]:
+        qp = '$filter'
+        if self._filter is None:
+            return qp, None
+        fields = self.odata_class.entity_model.model_fields
+        field_mapping = {f: i.alias or f for f, i in fields.items()}
+        return qp, self._filter.build_expression(field_mapping)
+
+    def filter(self, *args, **kwargs) -> 'ODataManager':
         """
-        Applies filtering conditions to the OData query.
-
-        You can pass Q objects as positional arguments or key-value pairs
-        like `name='Ivanov'` or `age__gt=30`. If a filter already exists,
-        the new conditions are combined with the existing ones using logical AND.
-
-        Returns:
-            ODataManager[OM]: The manager instance to allow method chaining.
+        Sets filtering conditions.
+        Example: filter(Q(a=1, b__gt), c__in=[1, 2])
+        :param args: Q objects.
+        :param kwargs: Lookups.
+        :return: self
         """
-        q_obj = Q(*args, **kwargs)
-        if self._filter_conditions:
-            self._filter_conditions &= q_obj
+        q = Q(*args, **kwargs)
+        if self._filter is not None:
+            self._filter &= q
         else:
-            self._filter_conditions = q_obj
+            self._filter = q
         return self
 
-    def expand(self, *fields: str) -> "ODataManager[OM]":
-        """
-        Specifies related fields to expand in the OData response.
+    @property
+    def qp_skip(self) -> tuple[str, str | None]:
+        return '$skip', self._skip
 
-        For example, `manager.expand('measure_unit', 'nomenclature_type')` will include
-        those nested entities in the response, if supported.
-
-        Args:
-            *fields (str): Names of fields to expand.
-
-        Returns:
-            ODataManager[OM]: The manager instance, allowing method chaining.
-        """
-        self._expand_fields = list(fields)
-        return self
-
-    def top(self, n: int) -> "ODataManager[OM]":
-        """
-        Limits the number of entities returned by specifying the OData $top option.
-
-        Args:
-            n (int): The maximum number of records to return.
-
-        Returns:
-            ODataManager[OM]: The manager instance, allowing method chaining.
-        """
-        self._top = n
-        return self
-
-    def skip(self, n: int) -> "ODataManager[OM]":
-        """
-        Skips a specified number of entities using the OData $skip option.
-
-        Args:
-            n (int): The number of records to skip.
-
-        Returns:
-            ODataManager[OM]: The manager instance, allowing method chaining.
-        """
+    def skip(self, n: int) -> 'ODataManager':
+        """Skips n number of entities."""
         self._skip = n
         return self
 
-    def get_url(self) -> str:
-        """
-        Constructs the base URL for the OData entity set.
+    @property
+    def qp_top(self) -> tuple[str, str | None]:
+        return '$top', self._top
 
-        Returns:
-            str: The base URL of the OData entity set.
-        """
-        return f"{self.odata_class.database}/{self.odata_path}/{self.odata_class.entity_name}"
+    def top(self, n: int) -> 'ODataManager':
+        """Getting n number of entities."""
+        self._top = n
+        return self
 
-    def _prepare_query_params(self) -> Dict[str, Any]:
-        """
-        Prepares OData query parameters based on current filters, expansions, top, and skip settings.
-
-        Returns:
-            Dict[str, Any]: A dictionary of OData query parameters.
-        """
-        params = {}
-        if self._expand_fields:
-            params["$expand"] = ",".join(self._expand_fields)
-        if self._filter_conditions:
-            params["$filter"] = str(self._filter_conditions)
-        if self._top is not None:
-            params["$top"] = str(self._top)
-        if self._skip is not None:
-            params["$skip"] = str(self._skip)
-        return params
-
-    def _check_response(self, expected_status: int) -> None:
-        """
-        Checks if the HTTP response has the expected status code.
-
-        Raises:
-            ODataResponseError: If the status code is not as expected.
-        """
-        if self.response.status_code != expected_status:
-            raise ODataResponseError(
-                self.response.status_code, self.response.reason, self.response.text
-            )
-
-    def _parse_response(self) -> Any:
-        """
-        Parses the OData response JSON and extracts the entities data.
-
-        Raises:
-            ODataError: If the JSON cannot be parsed or the expected key is missing.
-
-        Returns:
-            Any: The parsed data, typically a list of entities.
-        """
-        try:
-            return self.response.json()[self.odata_list_json_key]
-        except (ValueError, KeyError) as e:
-            raise ODataError(f"Error parsing response: {e}") from e
-
-    def _validate_data(self, data: List[Dict[str, Any]], ignore_invalid: bool) -> List[OM]:
-        """
-        Validates the raw data against the entity model and returns a list of model instances.
-
-        Args:
-            data (List[Dict[str, Any]]): The raw entities data from the OData response.
-            ignore_invalid (bool): If True, invalid items are skipped and stored in `validation_errors`.
-                                   If False, an exception is raised on the first invalid item.
-
-        Returns:
-            List[OM]: A list of validated entity instances.
-        """
-        valid_objects = []
-        for item in data:
-            try:
-                obj = self.odata_class.entity_model.model_validate(item)
-                valid_objects.append(obj)
-            except Exception as e:
-                self.validation_errors.append(e)
-                if not ignore_invalid:
-                    raise e
-        return valid_objects
+    @staticmethod
+    def prepare_query_params(*args: tuple[str, str]) -> dict[str, Any]:
+        qps = {}
+        for qp, val in args:
+            if val is not None:
+                qps[qp] = val
+        return qps
