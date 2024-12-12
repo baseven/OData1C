@@ -130,19 +130,15 @@ def main():
         manager = PhysicalPersonOData.manager(conn)
 
         # Execute various operations
+        # Example GUID for fetching a single entity
+
         # guid_example = 'e09df266-7bf4-11e2-9362-001b11b25590'
         # fetch_single_person(manager, guid_example)
-        fetch_filtered_persons(manager)
-
-
-
+        # fetch_filtered_persons(manager)
 
         # fetch_paged_and_filtered_persons(manager)
         # fetch_expanded_persons(manager)
         #
-        # # Example GUID for fetching a single entity
-        # guid_example = 'e09df266-7bf4-11e2-9362-001b11b25590'
-        # fetch_single_person(manager, guid_example)
         #
         # # Debugging information
         # debug_manager(manager)
