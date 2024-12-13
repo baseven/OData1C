@@ -25,9 +25,9 @@ pip install odata1c-client
 ```
 
 ## Зависимости
-- Python >= 3.12
-- Pydantic >= 2.7.0
-- Requests >= 2.32.0
+- Python = 3.12
+- Pydantic = 2.7.0
+- Requests = 2.32.0
 
 ## Пример использования
 
