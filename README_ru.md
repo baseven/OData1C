@@ -176,6 +176,45 @@ from OData1C.odata.query import Q
 manager.filter(Q(name='Ivanov') & Q(age__gt=30))
 ```
 
+## Работа с метаданными
+
+В OData1C также есть удобный механизм для запроса и разбора `$metadata` в 1С OData с кэшированием, что ускоряет 
+повторные обращения. Это полезно, если вам нужно изучать доступные Каталоги, Документы или любые другие сущности 
+(Entity Types) и их поля без многократных дорогих HTTP-запросов.
+
+```python
+from OData1C.connection import Connection
+from OData1C.odata.metadata_manager import MetadataManager
+from requests.auth import HTTPBasicAuth
+
+with Connection(
+        host='1c.dev.evola.ru',
+        protocol='https',
+        authentication=HTTPBasicAuth('username', 'password')
+) as conn:
+    mdm = MetadataManager(connection=conn, database='zup-demo')
+
+    # Retrieve all entity types
+    entity_types = mdm.list_entity_types()
+    print(entity_types)
+
+    # Retrieve all entity sets
+    entity_sets = mdm.list_entity_sets()
+    print(entity_sets)
+
+    # Inspect specific entity fields
+    fields = mdm.get_properties_for_entity_type("Catalog_ФизическиеЛица")
+    print(fields)
+
+    # Force reloading metadata if necessary
+    mdm.reload_metadata()
+```
+
+Данный подход кэширует метаданные в памяти после первой загрузки, и все последующие вызовы (например, 
+`list_entity_sets()` или `get_properties_for_entity_type(...)`) получают нужную информацию из уже разобранной структуры, 
+а не заново парсят XML. Это существенно снижает издержки, если в вашем приложении часто нужно смотреть метаданные.
+
+
 ## Отладка
 
 Экземпляр `ODataManager` после выполнения запроса имеет атрибуты request и response.

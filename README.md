@@ -1,9 +1,12 @@
 # OData1C - A Python OData Client for 1C Systems
 
 OData1C is a Python client designed to interact with 1C systems via their OData v3 REST endpoints.  
-This client aims to simplify and streamline common tasks such as querying entities, applying filters and expansions, creating and updating data, and handling related entities. It uses **Pydantic** for data validation and **Requests** for HTTP communication.
+This client aims to simplify and streamline common tasks such as querying entities, applying filters and expansions, 
+creating and updating data, and handling related entities. 
+It uses **Pydantic** for data validation and **Requests** for HTTP communication.
 
-While originally inspired by [PyOData1C](https://github.com/kr-aleksey/PyOData1C) (with only essential OData capabilities for 1C), OData1C has been refined with clearer structure, comprehensive English docstrings, improved maintainability, and extensibility.
+While originally inspired by [PyOData1C](https://github.com/kr-aleksey/PyOData1C) (with only essential OData capabilities for 1C), OData1C has been refined 
+with clearer structure, comprehensive English docstrings, improved maintainability, and extensibility.
 
 ## Key Features
 
@@ -175,6 +178,45 @@ from OData1C.odata.query import Q
 
 manager.filter(Q(name='Ivanov') & Q(age__gt=30))
 ```
+
+## Working with Metadata
+
+OData1C also provides a convenient way to fetch and parse 1C OData `$metadata` descriptions, caching them for faster 
+subsequent access. This helps if you need to inspect available Catalogs, Documents, or any other entity types and their 
+fields without repeatedly issuing costly HTTP requests.
+
+```python
+from OData1C.connection import Connection
+from OData1C.odata.metadata_manager import MetadataManager
+from requests.auth import HTTPBasicAuth
+
+with Connection(
+        host='1c.dev.evola.ru',
+        protocol='https',
+        authentication=HTTPBasicAuth('username', 'password')
+) as conn:
+    mdm = MetadataManager(connection=conn, database='zup-demo')
+
+    # Retrieve all entity types
+    entity_types = mdm.list_entity_types()
+    print(entity_types)
+
+    # Retrieve all entity sets
+    entity_sets = mdm.list_entity_sets()
+    print(entity_sets)
+
+    # Inspect specific entity fields
+    fields = mdm.get_properties_for_entity_type("Catalog_ФизическиеЛица")
+    print(fields)
+
+    # Force reloading metadata if necessary
+    mdm.reload_metadata()
+```
+
+This approach caches the metadata in memory on the first load, and any subsequent calls (like `list_entity_sets()` or 
+`get_properties_for_entity_type(...)`) retrieve information from an in-memory structure rather than re-parsing XML each 
+time. This can significantly reduce the overhead if you repeatedly inspect the metadata in your application.
+
 
 ## Debugging
 
