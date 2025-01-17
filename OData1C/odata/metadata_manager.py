@@ -1,5 +1,3 @@
-# OData1C/odata/metadata_manager.py
-
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional
 
