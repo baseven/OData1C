@@ -49,6 +49,7 @@ class Connection:
         host: str,
         protocol: str,
         authentication: AuthBase,
+        headers: Optional[Dict[str, str]] = None,
         connection_timeout: Union[int, float] = DEFAULT_CONNECTION_TIMEOUT,
         read_timeout: Union[int, float] = DEFAULT_READ_TIMEOUT
     ) -> None:
@@ -59,15 +60,15 @@ class Connection:
             host (str): The hostname or IP address of the 1C server.
             protocol (str): The protocol to use (e.g. 'http' or 'https').
             authentication (AuthBase): An authentication handler (e.g. HTTPBasicAuth).
+            headers (Optional[Dict[str, str]]): Additional HTTP headers to include with every request.
             connection_timeout (Union[int, float]): Maximum time in seconds to wait for a connection to the server.
             read_timeout (Union[int, float]): Maximum time in seconds to wait for a response after a connection is established.
-            headers (Optional[Dict[str, str]]): Additional HTTP headers to include with every request.
         """
         self.base_url = f"{protocol}://{host}/"
         self.connection_timeout = connection_timeout
         self.read_timeout = read_timeout
         self.auth = authentication
-        self.headers = DEFAULT_HEADERS.copy()
+        self.headers = headers or DEFAULT_HEADERS.copy()
         self._session: Optional[Session] = None
 
     def __enter__(self) -> "Connection":
@@ -131,7 +132,6 @@ class Connection:
                 prepared_request,
                 timeout=(self.connection_timeout, self.read_timeout),
             )
-            response.raise_for_status()
             return response
         except (RequestsConnectionError, Timeout) as e:
             raise ODataConnectionError(str(e)) from e
