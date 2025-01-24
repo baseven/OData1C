@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
 from requests import Response
-from requests.auth import AuthBase
 from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
 
 from OData1C.connection import Connection, ODataRequest
@@ -43,28 +42,6 @@ def mocked_session(mocker):
     mock_session_instance = mock_session_class.return_value
     mock_session_instance.headers = {}
     return mock_session_instance
-
-
-@pytest.fixture
-def default_auth():
-    """
-    A fixture that provides a mock authentication object for the Connection.
-    """
-    return MagicMock(spec=AuthBase)
-
-
-@pytest.fixture
-def default_connection(default_auth):
-    """
-    A fixture that creates a Connection with default parameters.
-
-    Authentication is mocked using the 'default_auth' fixture.
-    """
-    return Connection(
-        host="test-host",
-        protocol="http",
-        authentication=default_auth
-    )
 
 
 @pytest.mark.parametrize(
