@@ -113,6 +113,11 @@ class Connection:
         If a session is not available (not used as a context manager), a temporary session
         will be created and closed after the request is complete.
 
+        NOTE: Currently, this method always sends the request body as JSON
+        (via `json=request.data`), which implies `Content-Type: application/json`.
+        If your 1C OData server only accepts XML or another format,
+        you need to override this method or manually construct your request differently.
+
         Args:
             request (ODataRequest): The request object containing method, relative_url, query_params, and data.
 
