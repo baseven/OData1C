@@ -11,6 +11,7 @@ from OData1C.exceptions import ODataResponseError
 class MetadataManager:
     """
     High-level class for loading and accessing OData metadata from 1C.
+    If the 1C server ever supports JSON metadata responses, we would need to add additional logic.
 
     Provides four main operations (public API):
       1) get_entity_sets() -> List[str]
@@ -82,6 +83,7 @@ class MetadataManager:
         if not self._is_metadata_loaded:
             self._load_and_parse_metadata()
 
+    #TODO: Implement JSON parsing if the 1C OData endpoint provides JSON-based metadata.
     def _load_and_parse_metadata(self) -> None:
         """
         Fetch the raw XML metadata from server and parse it into
