@@ -1,0 +1,26 @@
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+    <edmx:DataServices xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+        <Schema xmlns="http://schemas.microsoft.com/ado/2009/11/edm" Namespace="TestNamespace">
+            <EntityType Name="TestEntity">
+                <Key>
+                    <PropertyRef Name="ID"/>
+                </Key>
+                <Property Name="ID" Type="Edm.Int32" Nullable="false"/>
+                <Property Name="Name" Type="Edm.String" Nullable="true"/>
+            </EntityType>
+
+            <EntityType Name="TestEntity2">
+                <Key>
+                    <PropertyRef Name="GuidKey"/>
+                </Key>
+                <Property Name="GuidKey" Type="Edm.Guid" Nullable="false"/>
+                <Property Name="Description" Type="Edm.String" Nullable="true"/>
+            </EntityType>
+
+            <EntityContainer Name="TestContainer">
+                <EntitySet Name="TestEntities" EntityType="TestNamespace.TestEntity"/>
+                <EntitySet Name="TestEntities2" EntityType="TestNamespace.TestEntity2"/>
+            </EntityContainer>
+        </Schema>
+    </edmx:DataServices>
+</edmx:Edmx>
