@@ -11,4 +11,7 @@ build:
 	poetry build
 
 publish:
-	poetry publish --dry-run
+	poetry publish
+
+run-metadata:
+	poetry run python example/metadata.py
