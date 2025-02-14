@@ -1,0 +1,64 @@
+{
+  "TestEntity": [
+    {"name": "ID", "type": "Edm.Int32"},
+    {"name": "Name", "type": "Edm.String"}
+  ],
+  "TestEntity2": [
+    {"name": "GuidKey", "type": "Edm.Guid"},
+    {"name": "Description", "type": "Edm.String"}
+  ],
+  "TestEntity3": [
+    {"name": "ID", "type": "Edm.Int32"},
+    {"name": "Items", "type": "Collection(TestNamespace.TestItem_RowType)"},
+    {
+      "name": "Items (expanded)",
+      "type": "Collection",
+      "depth": 1,
+      "properties": [
+        {"name": "ItemID", "type": "Edm.Int32"},
+        {"name": "ItemName", "type": "Edm.String"}
+      ]
+    }
+  ],
+  "TestEntity4": [
+    {"name": "ID", "type": "Edm.Int32"},
+    {"name": "CollectionA", "type": "Collection(TestNamespace.ChildA_RowType)"},
+    {
+      "name": "CollectionA (expanded)",
+      "type": "Collection",
+      "depth": 1,
+      "properties": [
+        {"name": "ChildProp1", "type": "Edm.String"},
+        {"name": "CollectionB", "type": "Collection(TestNamespace.ChildB_RowType)"},
+        {
+          "name": "CollectionB (expanded)",
+          "type": "Collection",
+          "depth": 2,
+          "properties": [
+            {"name": "ChildProp2", "type": "Edm.Int32"}
+          ]
+        }
+      ]
+    },
+    {"name": "CollectionC", "type": "Collection(TestNamespace.ChildC_RowType)"},
+    {
+      "name": "CollectionC (expanded)",
+      "type": "Collection",
+      "depth": 1,
+      "properties": [
+        {"name": "ChildProp3", "type": "Edm.Boolean"}
+      ]
+    }
+  ],
+  "RecursiveEntity": [
+    {"name": "ID", "type": "Edm.Int32"},
+    {"name": "Value", "type": "Edm.String"},
+    {"name": "Children", "type": "Collection(TestNamespace.RecursiveEntity_RowType)"},
+    {
+      "name": "Children (expanded)",
+      "type": "Collection",
+      "depth": 1,
+      "properties": []
+    }
+  ]
+}

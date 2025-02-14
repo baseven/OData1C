@@ -1,3 +1,4 @@
+import json
 import pytest
 from http import HTTPStatus
 from pathlib import Path
@@ -25,6 +26,12 @@ def metadata_content():
 
 
 @pytest.fixture
+def expected_properties():
+    """Fixture providing expected properties mapping from a JSON file."""
+    return json.loads(read_file("expected_properties.json"))
+
+
+@pytest.fixture
 def manager(default_connection):
     """
     Creates a fresh MetadataManager instance without patching anything.
@@ -46,8 +53,6 @@ def patched_manager(manager, metadata_content, mocker):
 def test_metadata_manager_init(manager):
     """
     Ensure the MetadataManager initializes correctly with an empty state.
-    - Metadata should not be loaded initially.
-    - Internal storage structures should be empty.
     """
     assert not manager._is_metadata_loaded
     assert not manager._entity_sets
@@ -60,7 +65,11 @@ def test_get_entity_sets(patched_manager):
     Check that get_entity_sets() correctly returns the list of EntitySets from the metadata.xml.
     """
     entity_sets = patched_manager.get_entity_sets()
-    assert sorted(entity_sets) == ["TestEntities", "TestEntities2"]
+    expected_sets = [
+        "TestEntities", "TestEntities2", "TestEntities3",
+        "TestEntity4s", "RecursiveEntities"
+    ]
+    assert sorted(entity_sets) == sorted(expected_sets)
 
 
 def test_get_entity_types(patched_manager):
@@ -68,45 +77,42 @@ def test_get_entity_types(patched_manager):
     Check that get_entity_types() correctly returns the list of EntityTypes from the metadata.xml.
     """
     entity_types = patched_manager.get_entity_types()
-    assert sorted(entity_types) == ["TestEntity", "TestEntity2"]
+    expected_types = [
+        "TestEntity", "TestEntity2", "TestItem", "TestEntity3",
+        "ChildB", "ChildA", "ChildC", "TestEntity4", "RecursiveEntity"
+    ]
+    assert sorted(entity_types) == sorted(expected_types)
 
 
-@pytest.mark.parametrize("entity_name, expected_props", [
-    ("TestEntity", [
-        {"name": "ID", "type": "Edm.Int32"},
-        {"name": "Name", "type": "Edm.String"}
-    ]),
-    ("TestEntity2", [
-        {"name": "GuidKey", "type": "Edm.Guid"},
-        {"name": "Description", "type": "Edm.String"}
-    ]),
-    ("UnknownEntity", []),  # Should return an empty list if entity doesn't exist
+@pytest.mark.parametrize("entity_name", [
+    "TestEntity",
+    "TestEntity2",
+    "TestEntity3",
+    "TestEntity4",
+    "RecursiveEntity"
 ])
-def test_get_properties(patched_manager, entity_name, expected_props):
+def test_get_properties(patched_manager, expected_properties, entity_name):
     """
     Ensure get_properties(entity_name) returns the correct properties for each entity.
-    Uses parametrization to test multiple entities in one go.
+    This single test covers simple, complex, and recursive entities.
     """
     properties = patched_manager.get_properties(entity_name)
-    assert properties == expected_props
+    assert properties == expected_properties[entity_name]
 
 
 def test_reset_metadata(patched_manager):
     """
     After calling reset_metadata(), the manager should reload metadata on the next request.
     """
-    # First load
     patched_manager.get_entity_sets()
     assert patched_manager._is_metadata_loaded
 
-    # Reset and verify
     patched_manager.reset_metadata()
     assert not patched_manager._is_metadata_loaded
     assert not patched_manager._entity_sets
     assert not patched_manager._entity_types
     assert not patched_manager._entity_type_properties
 
-    # Ensure it reloads after reset
     patched_manager.get_entity_sets()
     assert patched_manager._is_metadata_loaded
 
@@ -119,8 +125,8 @@ def test_reset_metadata(patched_manager):
 def test_check_response_error_handling(status_code, reason, text, should_raise):
     """
     Ensure _check_response behaves correctly for different HTTP status codes:
-      - 200 => no error
-      - 4xx/5xx => raises ODataResponseError
+      - 200 => no error,
+      - 4xx/5xx => raises ODataResponseError.
     """
     fake_response = type("FakeResponse", (), {
         "status_code": status_code,
