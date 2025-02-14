@@ -15,3 +15,6 @@ publish:
 
 run-metadata:
 	poetry run python example/metadata.py
+
+run-fetch:
+	poetry run python example/fetching_data.py
