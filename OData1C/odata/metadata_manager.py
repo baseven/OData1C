@@ -1,28 +1,23 @@
 import xml.etree.ElementTree as ET
 from http import HTTPStatus
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional, Set, Any
 
 from requests import Response
 
 from OData1C.connection import Connection, ODataRequest
 from OData1C.exceptions import ODataResponseError
 
+MAX_RECURSION_DEPTH = 5
+
 
 class MetadataManager:
     """
     High-level class for loading and accessing OData metadata from 1C.
-    If the 1C server ever supports JSON metadata responses, we would need to add additional logic.
-
-    Provides four main operations (public API):
+    Provides the following public API methods:
       1) get_entity_sets() -> List[str]
       2) get_entity_types() -> List[str]
-      3) get_properties(entity_type: str) -> List[Dict[str, str]]
-      4) reset_metadata() -> None (forces a full reset of metadata)
-
-    Usage:
-      - Create an instance with a Connection and database name.
-      - Call any of the public methods to retrieve metadata.
-      - If needed, call reset_metadata() to force clearing any cached data.
+      3) get_properties(entity_type: str) -> List[Dict[str, Any]]
+      4) reset_metadata() -> None
     """
 
     ODATA_NAMESPACE = "{http://schemas.microsoft.com/ado/2009/11/edm}"
@@ -31,13 +26,11 @@ class MetadataManager:
 
     def __init__(self, connection: Connection, database_name: str) -> None:
         """
-        :param connection:     A pre-configured Connection instance with auth/session params.
-        :param database_name:  The 1C database name. Used in the final URL:
-                               <protocol>://<host>/<database_name>/<ODATA_BASE_PATH>/<METADATA_PATH>
+        :param connection: A pre-configured Connection instance with auth/session parameters.
+        :param database_name: The 1C database name used to build the metadata URL.
         """
         self._connection = connection
         self._database_name = database_name
-
         self._is_metadata_loaded = False
 
         self._entity_sets: List[str] = []
@@ -58,13 +51,15 @@ class MetadataManager:
         self._ensure_metadata_loaded()
         return self._entity_types
 
-    def get_properties(self, entity_type: str) -> List[Dict[str, str]]:
+    def get_properties(self, entity_type: str) -> List[Dict[str, Any]]:
         """
         Returns a list of properties for the given EntityType name.
-        Each property is a dict with keys {"name", "type"}.
+        Each property is a dictionary with keys such as "name" and "type".
+        If a property is a Collection (a reference to another entity type),
+        its properties will be recursively expanded.
         """
         self._ensure_metadata_loaded()
-        return self._entity_type_properties.get(entity_type, [])
+        return self._expand_properties(entity_type)
 
     def reset_metadata(self) -> None:
         """
@@ -77,49 +72,36 @@ class MetadataManager:
 
     def _ensure_metadata_loaded(self) -> None:
         """
-        Lazy-loading mechanism. Checks if metadata is loaded:
-        - If not, calls _load_and_parse_metadata to fetch and parse the data.
+        Lazy-loading mechanism: loads metadata if it has not been loaded yet.
         """
         if not self._is_metadata_loaded:
             self._load_and_parse_metadata()
 
-    #TODO: Implement JSON parsing if the 1C OData endpoint provides JSON-based metadata.
+    # TODO: Implement JSON parsing if the 1C OData endpoint provides JSON-based metadata.
     def _load_and_parse_metadata(self) -> None:
         """
-        Fetch the raw XML metadata from server and parse it into
-        in-memory structures (_entity_sets, _entity_types, _entity_type_properties).
-        After parsing, sets the flag `_is_metadata_loaded = True`.
+        Fetches and parses the raw XML metadata from the server,
+        initializing internal data structures.
         """
         xml_data = self._fetch_metadata_xml()
         root = ET.fromstring(xml_data)
-
         entity_sets, entity_types, entity_type_properties = self._parse_metadata_tree(root)
         self._entity_sets = entity_sets
         self._entity_types = entity_types
         self._entity_type_properties = entity_type_properties
-
         self._is_metadata_loaded = True
 
     def _build_metadata_url(self) -> str:
         """
-        Build the relative URL that excludes the host/protocol but includes
-        database_name, odata_base_path, and metadata_path.
-
-        Example:
-            "zup-demo/odata/standard.odata/$metadata"
-
-        :return: A relative URL string to be appended to Connection.base_url
+        Builds the relative URL for fetching metadata.
+        Example: "database_name/odata/standard.odata/$metadata"
         """
         return f"{self._database_name}/{self.ODATA_BASE_PATH}/{self.METADATA_PATH}"
 
     @staticmethod
     def _check_response(response: Response, expected_status: int) -> None:
         """
-        Raises ODataResponseError if response status does not match the expected status.
-
-        :param response:   The Response object to check
-        :param expected_status:  The expected HTTP status code (e.g., 200 for OK)
-        :raises ODataResponseError: if status_code != expected_status
+        Raises an error if the response status code is not as expected.
         """
         if response.status_code != expected_status:
             raise ODataResponseError(
@@ -130,10 +112,7 @@ class MetadataManager:
 
     def _fetch_metadata_xml(self) -> str:
         """
-        Performs an HTTP GET request to retrieve metadata XML from the OData endpoint,
-        using the project-wide standard approach (Connection + ODataRequest).
-
-        :return: The raw XML text from the OData $metadata endpoint
+        Retrieves the metadata XML from the OData endpoint.
         """
         request = ODataRequest(
             method="GET",
@@ -148,13 +127,10 @@ class MetadataManager:
             root: ET.Element
     ) -> Tuple[List[str], List[str], Dict[str, List[Dict[str, str]]]]:
         """
-        Parse the XML tree and return the extracted metadata structures:
-          - entity_sets: list of EntitySet names
-          - entity_types: list of EntityType names
-          - entity_type_properties: mapping from EntityType name to a list of property dicts
-
-        :param root: The root Element of the parsed XML document
-        :return: (entity_sets, entity_types, entity_type_properties)
+        Parses the XML tree and returns:
+          - A list of EntitySet names.
+          - A list of EntityType names.
+          - A mapping of EntityType names to their property dictionaries.
         """
         entity_sets = [
             es.get("Name") for es in root.findall(f".//{self.ODATA_NAMESPACE}EntitySet")
@@ -182,3 +158,54 @@ class MetadataManager:
             entity_type_properties[et_name] = props
 
         return entity_sets, entity_types, entity_type_properties
+
+    def _expand_properties(
+            self,
+            entity_type: str,
+            depth: int = 0,
+            visited: Optional[Set[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Recursively expands properties of the given EntityType, including nested collections.
+
+        :param entity_type: The name of the EntityType to expand.
+        :param depth: Current recursion depth.
+        :param visited: Set of already visited entity types to prevent circular references.
+        :return: A list of property dictionaries, with nested collections expanded.
+        """
+        if visited is None:
+            visited = set()
+
+        if entity_type in visited or depth > MAX_RECURSION_DEPTH:
+            return []
+
+        visited.add(entity_type)
+
+        properties = self._entity_type_properties.get(entity_type, [])
+        expanded_properties = []
+
+        for prop in properties:
+            expanded_properties.append(prop)
+
+            related_type = self._get_related_type(prop.get("type", ""))
+            if related_type and related_type in self._entity_type_properties:
+                expanded_properties.append({
+                    "name": f"{prop['name']} (expanded)",
+                    "type": "Collection",
+                    "depth": depth + 1,
+                    "properties": self._expand_properties(related_type, depth + 1, visited)
+                })
+
+        return expanded_properties
+
+    def _get_related_type(self, type_str: str) -> Optional[str]:
+        """
+        Extracts and returns the name of the related entity from a collection type string.
+        Example:
+            "Collection(namespace.Entity_RowType)" -> "Entity"
+        """
+        if type_str.startswith("Collection(") and type_str.endswith(")"):
+            content = type_str[len("Collection("):-1]
+            related = content.split('.')[-1]
+            return related.replace("_RowType", "")
+        return None
